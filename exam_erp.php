@@ -33,6 +33,22 @@ $fields = [
     "cgpa" => "number",
     "grade_point" => "number"
 ];
+// --- Dropdown options ---
+$categories = ["General", "OBC", "SC", "ST", "EWS"];
+$religions = ["Hindu", "Muslim", "Christian", "Sikh", "Other"];
+$mother_tongues = ["Hindi", "English", "Bhojpuri", "Urdu", "Other"];
+$blood_groups = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
+
+// --- Fetch courses from DB ---
+$courses = [];
+$course_sql = "SELECT sno, class_description FROM class_detail ORDER BY class_description ASC";
+$course_result = $conn->query($course_sql);
+if ($course_result && $course_result->num_rows > 0) {
+    while ($row = $course_result->fetch_assoc()) {
+        $courses[$row['sno']] = $row['class_description'];
+    }
+}
+
 
 $paper_fields = [
     "type" => "text",
@@ -57,10 +73,12 @@ if (isset($_POST['search'])) {
     if (empty($exam_roll_no)) {
         echo "<div class='alert alert-danger'>Please enter a valid exam roll number.</div>";
     } else {
-        $info_sql = "SELECT esi.*, cd.class_description AS course_name_display 
-                     FROM exam_student_info esi 
-                     LEFT JOIN class_detail cd ON esi.course_name = cd.sno 
-                     WHERE esi.exam_roll_no = ?";
+       $info_sql = "SELECT esi.*, 
+                    esi.course_name AS course_id, 
+                    cd.class_description 
+             FROM exam_student_info esi 
+             LEFT JOIN class_detail cd ON esi.course_name = cd.sno 
+             WHERE esi.exam_roll_no = ?";
         $stmt = $conn->prepare($info_sql);
         $stmt->bind_param("s", $exam_roll_no);
         $stmt->execute();
@@ -68,19 +86,25 @@ if (isset($_POST['search'])) {
 
         if ($info_result && $info_result->num_rows > 0) {
             $info = $info_result->fetch_assoc();
-            $exam_id = $info['exam_id'];
+            $exam_id = $info['sno'];
 
-            $paper_sql = "SELECT * FROM exam_student_paper_info WHERE exam_student_info_sno = ?";
-            $stmt = $conn->prepare($paper_sql);
-            $stmt->bind_param("i", $exam_id);
-            $stmt->execute();
-            $paper_result = $stmt->get_result();
-            $paper = $paper_result->fetch_all(MYSQLI_ASSOC);
+          $paper_sql = "SELECT sno, subject_id, paper_code, title_of_paper, 
+                     type, theory_practical, pt_marks_max, pt_marks_obt, 
+                     mid_sem_marks_max, mid_sem_marks_obt 
+              FROM exam_student_paper_info 
+              WHERE exam_student_info_sno = ?";
+$stmt = $conn->prepare($paper_sql);
+$stmt->bind_param("i", $info['sno']);   // ✅ correct variable
+$stmt->execute();
+$paper_result = $stmt->get_result();
+$paper = $paper_result->fetch_all(MYSQLI_ASSOC);
+
         } else {
             echo "<div class='alert alert-danger'>Student not found.</div>";
         }
     }
 }
+
 
 if (isset($_POST['update_all'])) {
     // Check if form is already processed
@@ -108,8 +132,8 @@ if (isset($_POST['update_all'])) {
             dob = ?, mobile_no = ?, uin_no = ?, course_name = ?, email = ?, aadhar = ?, 
             category = ?, religion = ?, whatsapp_no = ?, p_mobile = ?, mother_tongue = ?, 
             blood_group = ?, transaction_id = ?, max_marks = ?, obt_marks = ?, sgpa = ?, 
-            cgpa = ?, grade_point = ? WHERE exam_id = ?";
-        $stmt = $conn->prepare($update_info);
+            cgpa = ?, grade_point = ? WHERE sno = ?";
+      $stmt = $conn->prepare($update_info);
         $stmt->bind_param(
             "sssssssssssssssssdddddi",
             $_POST['student_name'], $_POST['college_roll_no'], $_POST['exam_form_no'], 
@@ -131,30 +155,16 @@ if (isset($_POST['update_all'])) {
                     WHERE exam_student_info_sno = ? AND subject_id = ?";
                 
                 // Fetch existing subject IDs
-                $existing_papers_sql = "SELECT subject_id FROM exam_student_paper_info WHERE exam_student_info_sno = ?";
-                $stmt = $conn->prepare($existing_papers_sql);
-                $stmt->bind_param("i", $exam_id);
-                $stmt->execute();
-                $existing_papers_result = $stmt->get_result();
-                $existing_paper_ids = [];
-                while ($row = $existing_papers_result->fetch_assoc()) {
-                    $existing_paper_ids[] = $row['subject_id'];
-                }
+                $update_paper = "UPDATE exam_student_paper_info SET 
+                        type = ?, title_of_paper = ?, theory_practical = ?, 
+                        pt_marks_max = ?, pt_marks_obt = ?, mid_sem_marks_max = ?, mid_sem_marks_obt = ? 
+                        WHERE sno = ?";
 
                 foreach ($_POST['type'] as $index => $type) {
-                    if (
-                        !empty($type) &&
-                        !empty($_POST['title_of_paper'][$index]) &&
-                        !empty($_POST['theory_practical'][$index]) &&
-                        isset($_POST['pt_marks_max'][$index]) && is_numeric($_POST['pt_marks_max'][$index]) &&
-                        isset($_POST['pt_marks_obt'][$index]) && is_numeric($_POST['pt_marks_obt'][$index]) &&
-                        isset($_POST['mid_sem_marks_max'][$index]) && is_numeric($_POST['mid_sem_marks_max'][$index]) &&
-                        isset($_POST['mid_sem_marks_obt'][$index]) && is_numeric($_POST['mid_sem_marks_obt'][$index]) &&
-                        isset($_POST['subject_id'][$index]) && in_array($_POST['subject_id'][$index], $existing_paper_ids)
-                    ) {
+                    if (!empty($type) && !empty($_POST['title_of_paper'][$index])) {
                         $stmt = $conn->prepare($update_paper);
                         $stmt->bind_param(
-                            "ssssssssi",
+                            "sssssssi",
                             $type,
                             $_POST['title_of_paper'][$index],
                             $_POST['theory_practical'][$index],
@@ -162,37 +172,44 @@ if (isset($_POST['update_all'])) {
                             $_POST['pt_marks_obt'][$index],
                             $_POST['mid_sem_marks_max'][$index],
                             $_POST['mid_sem_marks_obt'][$index],
-                            $exam_id,
-                            $_POST['subject_id'][$index]
+                            $_POST['paper_sno'][$index]  // ✅ direct row ke sno se update
                         );
                         $stmt->execute();
                     }
                 }
+
             }
 
             echo "<div class='alert alert-success'>Student and paper data updated successfully!</div>";
-            $response = 2;
+            
 
             // Fetch updated data
-            $info_sql = "SELECT esi.*, cd.class_description AS course_name_display 
+            $info_sql = "SELECT esi.*, cd.class_description AS course_name 
                          FROM exam_student_info esi 
                          LEFT JOIN class_detail cd ON esi.course_name = cd.sno 
-                         WHERE esi.exam_id = ?";
+                         WHERE esi.sno = ?";
             $stmt = $conn->prepare($info_sql);
             $stmt->bind_param("i", $exam_id);
             $stmt->execute();
             $info_result = $stmt->get_result();
             $info = $info_result->fetch_assoc();
 
-            $paper_sql = "SELECT * FROM exam_student_paper_info WHERE exam_student_info_sno = ?";
-            $stmt = $conn->prepare($paper_sql);
-            $stmt->bind_param("i", $exam_id);
-            $stmt->execute();
-            $paper_result = $stmt->get_result();
-            $paper = $paper_result->fetch_all(MYSQLI_ASSOC);
+        $paper_sql = "SELECT sno, subject_id, paper_code, title_of_paper, 
+                     type, theory_practical, pt_marks_max, pt_marks_obt, 
+                     mid_sem_marks_max, mid_sem_marks_obt 
+              FROM exam_student_paper_info 
+              WHERE exam_student_info_sno = ?";
+$stmt = $conn->prepare($paper_sql);
+$stmt->bind_param("i", $info['sno']);   // ✅ correct variable
+$stmt->execute();
+$paper_result = $stmt->get_result();
+$paper = $paper_result->fetch_all(MYSQLI_ASSOC);
+
         } else {
             echo "<div class='alert alert-danger'>Error updating data: " . $conn->error . "</div>";
-        }
+        
+         }
+    $response = 2;
     }
 }
 ?>
@@ -295,25 +312,67 @@ h2 {
         <div class="card-body">
             <h2>Edit Student & Paper Info</h2>
             <form action="" method="POST" class="wufoo leftLabel page1">
-                <input type="hidden" name="exam_id" value="<?php echo htmlspecialchars($info['exam_id']); ?>">
+                <input type="hidden" name="exam_id" value="<?php echo htmlspecialchars($info['sno']); ?>">
                 <input type="hidden" name="form_processed" value="1">
                 
                 <!-- Student Info -->
                 <h3>Student Information</h3>
                 <div class="row">
                     <?php
+                 
                     foreach ($fields as $field => $type) {
-                        $value = htmlspecialchars($field === 'course_name' ? ($info['course_name_display'] ?? '') : ($info[$field] ?? ''));
-                        $label = ucwords(str_replace('_', ' ', $field));
-                        $input_type = ($type == 'number') ? 'number' : $type;
-                        $step = ($type == 'number') ? ' step="any"' : '';
-                        ?>
-                        <div class="col-md-4 mb-3">
-                            <label for="<?php echo $field; ?>" class="form-label"><?php echo $label; ?></label>
-                            <input type="<?php echo htmlspecialchars($input_type); ?>" name="<?php echo $field; ?>" id="<?php echo htmlspecialchars($field); ?>" class="form-control" value="<?php echo $value; ?>"<?php echo $step; ?>>
-                        </div>
-                    <?php } ?>
-                </div>
+    $value = htmlspecialchars($field === 'course_name' ? ($info['course_id'] ?? '') : ($info[$field] ?? ''));
+    $label = ucwords(str_replace('_', ' ', $field));
+
+    echo '<div class="col-md-4 mb-3">';
+    echo "<label for='$field' class='form-label'>$label</label>";
+
+    // --- Dropdown fields ---
+    if ($field === "category") {
+        echo "<select name='$field' id='$field' class='form-control'>";
+        foreach ($categories as $option) {
+            $selected = ($value === $option) ? "selected" : "";
+            echo "<option value='$option' $selected>$option</option>";
+        }
+        echo "</select>";
+    } elseif ($field === "religion") {
+        echo "<select name='$field' id='$field' class='form-control'>";
+        foreach ($religions as $option) {
+            $selected = ($value === $option) ? "selected" : "";
+            echo "<option value='$option' $selected>$option</option>";
+        }
+        echo "</select>";
+    } elseif ($field === "mother_tongue") {
+        echo "<select name='$field' id='$field' class='form-control'>";
+        foreach ($mother_tongues as $option) {
+            $selected = ($value === $option) ? "selected" : "";
+            echo "<option value='$option' $selected>$option</option>";
+        }
+        echo "</select>";
+    } elseif ($field === "blood_group") {
+        echo "<select name='$field' id='$field' class='form-control'>";
+        foreach ($blood_groups as $option) {
+            $selected = ($value === $option) ? "selected" : "";
+            echo "<option value='$option' $selected>$option</option>";
+        }
+        echo "</select>";
+    } elseif ($field === "course_name") {
+        echo "<select name='$field' id='$field' class='form-control'>";
+        foreach ($courses as $id => $course_name) {
+            $selected = ($value == $id) ? "selected" : "";
+            echo "<option value='$id' $selected>$course_name</option>";
+        }
+        echo "</select>";
+    } else {
+        // --- Normal input fields ---
+        $input_type = ($type == 'number') ? 'number' : $type;
+        $step = ($type == 'number') ? ' step="any"' : '';
+        echo "<input type='$input_type' name='$field' id='$field' class='form-control' value='$value'$step>";
+    }
+
+    echo '</div>';
+}
+                ?>
 
                 <!-- Paper Info -->
                 <h3>Paper Information</h3>
@@ -344,6 +403,8 @@ h2 {
                                             <td><?php echo $sno++; ?></td>
                                             <td>
                                                 <input type="hidden" name="subject_id[]" value="<?php echo htmlspecialchars($paper_row['subject_id'] ?? ''); ?>">
+                                                <input type="hidden" name="paper_sno[]" value="<?php echo htmlspecialchars($paper_row['sno']); ?>">
+
                                                 <input type="text" name="type[]" class="form-control" value="<?php echo htmlspecialchars($paper_row['type'] ?? ''); ?>">
                                             </td>
                                             <td>
@@ -360,17 +421,19 @@ h2 {
                                                 </select>
                                             </td>
                                             <td>
-                                                <input type="number" name="pt_marks_max[]" class="form-control" value="<?php echo htmlspecialchars($paper_row['pt_marks_max'] ?? '0'); ?>" step="any">
+                                                <input  name="pt_marks_max[]" class="form-control" value="<?php echo htmlspecialchars($paper_row['pt_marks_max'] ?? '0'); ?>" step="any">
                                             </td>
+                                           <td>
+    <input  name="pt_marks_obt[]" class="form-control" 
+           value="<?php echo htmlspecialchars($paper_row['pt_marks_obt'] ?? '0'); ?>">
+</td>
                                             <td>
-                                                <input type="number" name="pt_marks_obt[]" class="form-control" value="<?php echo htmlspecialchars($paper_row['pt_marks_obt'] ?? '0'); ?>" step="any">
+                                                <input  name="mid_sem_marks_max[]" class="form-control" value="<?php echo htmlspecialchars($paper_row['mid_sem_marks_max'] ?? '0'); ?>" step="any">
                                             </td>
-                                            <td>
-                                                <input type="number" name="mid_sem_marks_max[]" class="form-control" value="<?php echo htmlspecialchars($paper_row['mid_sem_marks_max'] ?? '0'); ?>" step="any">
-                                            </td>
-                                            <td>
-                                                <input type="number" name="mid_sem_marks_obt[]" class="form-control" value="<?php echo htmlspecialchars($paper_row['mid_sem_marks_obt'] ?? '0'); ?>" step="any">
-                                            </td>
+                                           <td>
+    <input  name="mid_sem_marks_obt[]" class="form-control" 
+           value="<?php echo htmlspecialchars($paper_row['mid_sem_marks_obt'] ?? '0'); ?>">
+</td>
                                         </tr>
                                         <?php
                                     }
@@ -404,7 +467,7 @@ h2 {
             <table class="table table-striped">
                 <?php
                 foreach ($fields as $field => $type) {
-                    $value = $field === 'course_name' ? ($info['course_name_display'] ?? '') : ($info[$field] ?? '');
+                    $value = $field === 'course_name' ? ($info['course_name'] ?? '') : ($info[$field] ?? '');
                     $label = ucwords(str_replace('_', ' ', $field));
                     ?>
                     <tr>
